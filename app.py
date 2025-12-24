@@ -11,7 +11,18 @@ from diffusers import FluxKontextPipeline
 from diffusers.utils import load_image
 from huggingface_hub import hf_hub_download
 from aura_sr import AuraSR
-from gradio_imageslider import ImageSlider
+
+# --- # Device and CUDA Setup Check ---
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("CUDA_VISIBLE_DEVICES=", os.environ.get("CUDA_VISIBLE_DEVICES"))
+print("torch.__version__ =", torch.__version__)
+print("torch.version.cuda =", torch.version.cuda)
+print("cuda available:", torch.cuda.is_available())
+print("cuda device count:", torch.cuda.device_count())
+if torch.cuda.is_available():
+    print("current device:", torch.cuda.current_device())
+    print("device name:", torch.cuda.get_device_name(torch.cuda.current_device()))
+print("Using device:", device)
 
 from gradio.themes import Soft
 from gradio.themes.utils import colors, fonts, sizes
@@ -36,7 +47,7 @@ class OrangeRedTheme(Soft):
         self,
         *,
         primary_hue: colors.Color | str = colors.gray,
-        secondary_hue: colors.Color | str = colors.orange_red, # Use the new color
+        secondary_hue: colors.Color | str = colors.orange_red, 
         neutral_hue: colors.Color | str = colors.slate,
         text_size: sizes.Size | str = sizes.text_lg,
         font: fonts.Font | str | Iterable[fonts.Font | str] = (
@@ -85,35 +96,24 @@ class OrangeRedTheme(Soft):
 orange_red_theme = OrangeRedTheme()
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# --- # Device and CUDA Setup Check ---
-print("CUDA_VISIBLE_DEVICES=", os.environ.get("CUDA_VISIBLE_DEVICES"))
-print("torch.__version__ =", torch.__version__)
-print("torch.version.cuda =", torch.version.cuda)
-print("cuda available:", torch.cuda.is_available())
-print("cuda device count:", torch.cuda.device_count())
-if torch.cuda.is_available():
-    print("current device:", torch.cuda.current_device())
-    print("device name:", torch.cuda.get_device_name(torch.cuda.current_device()))
-
-print("Using device:", device)
-
+# --- Main Model Initialization ---
 MAX_SEED = np.iinfo(np.int32).max
 pipe = FluxKontextPipeline.from_pretrained("black-forest-labs/FLUX.1-Kontext-dev", torch_dtype=torch.bfloat16).to("cuda")
 
+# --- Load Adapters ---
 pipe.load_lora_weights("prithivMLmods/Kontext-Top-Down-View", weight_name="Kontext-Top-Down-View.safetensors", adapter_name="top-down")
 pipe.load_lora_weights("prithivMLmods/Kontext-Bottom-Up-View", weight_name="Kontext-Bottom-Up-View.safetensors", adapter_name="bottom-up")
 pipe.load_lora_weights("prithivMLmods/Kontext-CAM-Left-View", weight_name="Kontext-CAM-Left-View.safetensors", adapter_name="left-view")
 pipe.load_lora_weights("prithivMLmods/Kontext-CAM-Right-View", weight_name="Kontext-CAM-Right-View.safetensors", adapter_name="right-view")
 pipe.load_lora_weights("starsfriday/Kontext-Remover-General-LoRA", weight_name="kontext_remove.safetensors", adapter_name="kontext-remove")
 
+# --- Upscaler Initialization ---
 aura_sr = AuraSR.from_pretrained("fal/AuraSR-v2")
 
 @spaces.GPU
 def infer(input_image, prompt, lora_adapter, upscale_image, seed=42, randomize_seed=False, guidance_scale=2.5, steps=28, progress=gr.Progress(track_tqdm=True)):
     """
-    Perform image editing and optional upscaling, returning a pair for the ImageSlider.
+    Perform image editing and optional upscaling, returning the final image.
     """
     if not input_image:
         raise gr.Error("Please upload an image for editing.")
@@ -148,25 +148,25 @@ def infer(input_image, prompt, lora_adapter, upscale_image, seed=42, randomize_s
         progress(0.8, desc="Upscaling image...")
         image = aura_sr.upscale_4x(image)
 
-    return (original_image, image), seed, gr.Button(visible=True)
+    return image, seed, gr.Button(visible=True)
 
 @spaces.GPU
 def infer_example(input_image, prompt, lora_adapter):
     """
-    Wrapper function for gr.Examples to call the main infer logic for the slider.
+    Wrapper function for gr.Examples.
     """
-    (original_image, generated_image), seed, _ = infer(input_image, prompt, lora_adapter, upscale_image=False)
-    return (original_image, generated_image), seed
+    image, seed, _ = infer(input_image, prompt, lora_adapter, upscale_image=False)
+    return image, seed
 
 css="""
 #col-container {
     margin: 0 auto;
     max-width: 960px;
 }
-#main-title h1 {font-size: 2.1em !important;}
+#main-title h1 {font-size: 2.2em !important;}
 """
 
-with gr.Blocks(css=css, theme=orange_red_theme) as demo:
+with gr.Blocks() as demo:
     
     with gr.Column(elem_id="col-container"):
         gr.Markdown("# **Kontext-Photo-Mate-v2**", elem_id="main-title")
@@ -174,16 +174,16 @@ with gr.Blocks(css=css, theme=orange_red_theme) as demo:
         
         with gr.Row():
             with gr.Column():
-                input_image = gr.Image(label="Upload Image", type="pil", height="300")
-                with gr.Row():
-                    prompt = gr.Text(
-                        label="Edit Prompt",
-                        show_label=False,
-                        max_lines=1,
-                        placeholder="Enter your prompt for editing (e.g., 'Remove glasses')",
-                        container=False,
-                    )
-                    run_button = gr.Button("Run", variant="primary", scale=0)
+                input_image = gr.Image(label="Upload Image", type="pil", height=290)
+                
+                prompt = gr.Text(
+                    label="Edit Prompt",
+                    show_label=True,
+                    placeholder="e.g., transform into anime..",
+                )
+
+                run_button = gr.Button("Edit Image", variant="primary")
+
                 with gr.Accordion("Advanced Settings", open=False):
                     
                     seed = gr.Slider(
@@ -213,7 +213,7 @@ with gr.Blocks(css=css, theme=orange_red_theme) as demo:
                     )
                     
             with gr.Column():
-                output_slider = ImageSlider(label="Before / After", show_label=False, interactive=False)
+                output_image = gr.Image(label="Output Image", interactive=False, format="png", height=355)
                 reuse_button = gr.Button("Reuse this image", visible=False)
 
                 with gr.Row():
@@ -235,9 +235,9 @@ with gr.Blocks(css=css, theme=orange_red_theme) as demo:
                 ["examples/5.jpg", "[photo content], generate the right-side perspective of the scene. Ensure natural lighting, accurate geometry, and realistic textures. Maintain harmony with the original image’s environment, shadows, and visual tone while providing the right-side visual continuation.", "Kontext-CAM-Right-View"],
             ],
             inputs=[input_image, prompt, lora_adapter],
-            outputs=[output_slider, seed],
+            outputs=[output_image, seed],
             fn=infer_example,
-            cache_examples="lazy",
+            cache_examples=False,
             label="Examples"
         )
             
@@ -245,13 +245,13 @@ with gr.Blocks(css=css, theme=orange_red_theme) as demo:
         triggers=[run_button.click, prompt.submit],
         fn=infer,
         inputs=[input_image, prompt, lora_adapter, upscale_checkbox, seed, randomize_seed, guidance_scale, steps],
-        outputs=[output_slider, seed, reuse_button]
+        outputs=[output_image, seed, reuse_button]
     )
     
     reuse_button.click(
-        fn=lambda images: images[1] if isinstance(images, (list, tuple)) and len(images) > 1 else images,
-        inputs=[output_slider],
+        fn=lambda x: x,
+        inputs=[output_image],
         outputs=[input_image]
     )
 
-demo.launch(mcp_server=True, ssr_mode=False, show_error=True)
+demo.launch(theme=orange_red_theme, css=css, mcp_server=True, ssr_mode=False, show_error=True)
