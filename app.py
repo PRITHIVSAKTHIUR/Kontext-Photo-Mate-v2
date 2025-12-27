@@ -10,19 +10,8 @@ from typing import Iterable
 from diffusers import FluxKontextPipeline
 from diffusers.utils import load_image
 from huggingface_hub import hf_hub_download
-from aura_sr import AuraSR
 
-# --- # Device and CUDA Setup Check ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("CUDA_VISIBLE_DEVICES=", os.environ.get("CUDA_VISIBLE_DEVICES"))
-print("torch.__version__ =", torch.__version__)
-print("torch.version.cuda =", torch.version.cuda)
-print("cuda available:", torch.cuda.is_available())
-print("cuda device count:", torch.cuda.device_count())
-if torch.cuda.is_available():
-    print("current device:", torch.cuda.current_device())
-    print("device name:", torch.cuda.get_device_name(torch.cuda.current_device()))
-print("Using device:", device)
 
 from gradio.themes import Soft
 from gradio.themes.utils import colors, fonts, sizes
@@ -95,26 +84,17 @@ class OrangeRedTheme(Soft):
 
 orange_red_theme = OrangeRedTheme()
 
-
-# --- Main Model Initialization ---
 MAX_SEED = np.iinfo(np.int32).max
 pipe = FluxKontextPipeline.from_pretrained("black-forest-labs/FLUX.1-Kontext-dev", torch_dtype=torch.bfloat16).to("cuda")
 
-# --- Load Adapters ---
 pipe.load_lora_weights("prithivMLmods/Kontext-Top-Down-View", weight_name="Kontext-Top-Down-View.safetensors", adapter_name="top-down")
 pipe.load_lora_weights("prithivMLmods/Kontext-Bottom-Up-View", weight_name="Kontext-Bottom-Up-View.safetensors", adapter_name="bottom-up")
 pipe.load_lora_weights("prithivMLmods/Kontext-CAM-Left-View", weight_name="Kontext-CAM-Left-View.safetensors", adapter_name="left-view")
 pipe.load_lora_weights("prithivMLmods/Kontext-CAM-Right-View", weight_name="Kontext-CAM-Right-View.safetensors", adapter_name="right-view")
 pipe.load_lora_weights("starsfriday/Kontext-Remover-General-LoRA", weight_name="kontext_remove.safetensors", adapter_name="kontext-remove")
 
-# --- Upscaler Initialization ---
-aura_sr = AuraSR.from_pretrained("fal/AuraSR-v2")
-
 @spaces.GPU
-def infer(input_image, prompt, lora_adapter, upscale_image, seed=42, randomize_seed=False, guidance_scale=2.5, steps=28, progress=gr.Progress(track_tqdm=True)):
-    """
-    Perform image editing and optional upscaling, returning the final image.
-    """
+def infer(input_image, prompt, lora_adapter, seed=42, randomize_seed=False, guidance_scale=2.5, steps=28, progress=gr.Progress(track_tqdm=True)):
     if not input_image:
         raise gr.Error("Please upload an image for editing.")
 
@@ -144,18 +124,11 @@ def infer(input_image, prompt, lora_adapter, upscale_image, seed=42, randomize_s
         generator=torch.Generator().manual_seed(seed),
     ).images[0]
 
-    if upscale_image:
-        progress(0.8, desc="Upscaling image...")
-        image = aura_sr.upscale_4x(image)
-
-    return image, seed, gr.Button(visible=True)
+    return image, seed
 
 @spaces.GPU
 def infer_example(input_image, prompt, lora_adapter):
-    """
-    Wrapper function for gr.Examples.
-    """
-    image, seed, _ = infer(input_image, prompt, lora_adapter, upscale_image=False)
+    image, seed = infer(input_image, prompt, lora_adapter)
     return image, seed
 
 css="""
@@ -213,8 +186,7 @@ with gr.Blocks() as demo:
                     )
                     
             with gr.Column():
-                output_image = gr.Image(label="Output Image", interactive=False, format="png", height=355)
-                reuse_button = gr.Button("Reuse this image", visible=False)
+                output_image = gr.Image(label="Output Image", interactive=False, format="png", height=419)
 
                 with gr.Row():
                     lora_adapter = gr.Dropdown(
@@ -222,9 +194,6 @@ with gr.Blocks() as demo:
                         choices=["Kontext-Top-Down-View", "Kontext-Remover", "Kontext-Bottom-Up-View", "Kontext-CAM-Left-View", "Kontext-CAM-Right-View"],
                         value="Kontext-Top-Down-View"
                     )
-                    
-                with gr.Row():
-                    upscale_checkbox = gr.Checkbox(label="Upscale the final image", value=False)
 
         gr.Examples(
             examples=[
@@ -244,14 +213,8 @@ with gr.Blocks() as demo:
     gr.on(
         triggers=[run_button.click, prompt.submit],
         fn=infer,
-        inputs=[input_image, prompt, lora_adapter, upscale_checkbox, seed, randomize_seed, guidance_scale, steps],
-        outputs=[output_image, seed, reuse_button]
-    )
-    
-    reuse_button.click(
-        fn=lambda x: x,
-        inputs=[output_image],
-        outputs=[input_image]
+        inputs=[input_image, prompt, lora_adapter, seed, randomize_seed, guidance_scale, steps],
+        outputs=[output_image, seed]
     )
 
 demo.launch(theme=orange_red_theme, css=css, mcp_server=True, ssr_mode=False, show_error=True)
